@@ -1,0 +1,33 @@
+import express from 'express';
+import {
+  getDishes,
+  createDish,
+  updateDish,
+  uploadDishImage,
+  deleteDishImage,
+  deleteDish,
+  createModifier,
+  updateModifier,
+  deleteModifier
+} from '../controllers/dish.controller.js';
+import { authenticate, requireRestaurant } from '../middleware/auth.js';
+import { upload } from '../middleware/upload.js';
+
+const router = express.Router();
+
+// Public route
+router.get('/category/:categoryId', getDishes);
+
+// Protected routes - Dishes
+router.post('/', authenticate, requireRestaurant, createDish);
+router.put('/:id', authenticate, requireRestaurant, updateDish);
+router.post('/:id/upload-image', authenticate, requireRestaurant, upload.single('image'), uploadDishImage);
+router.delete('/:id/image', authenticate, requireRestaurant, deleteDishImage);
+router.delete('/:id', authenticate, requireRestaurant, deleteDish);
+
+// Protected routes - Modifiers
+router.post('/:dishId/modifiers', authenticate, requireRestaurant, createModifier);
+router.put('/modifiers/:id', authenticate, requireRestaurant, updateModifier);
+router.delete('/modifiers/:id', authenticate, requireRestaurant, deleteModifier);
+
+export default router;

@@ -1,0 +1,214 @@
+import { PrismaClient } from '@prisma/client';
+import { calculateSubscriptionEndDate } from '../utils/subscription.js';
+import { sendSubscriptionActivatedEmail } from '../utils/email.js';
+
+const prisma = new PrismaClient();
+
+export const getAllRestaurants = async (req, res, next) => {
+  try {
+    const restaurants = await prisma.restaurant.findMany({
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            phone: true
+          }
+        },
+        subscription: true,
+        _count: {
+          select: {
+            categories: true
+          }
+        }
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    });
+
+    res.json(restaurants);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getRestaurantById = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const restaurant = await prisma.restaurant.findUnique({
+      where: { id },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            phone: true
+          }
+        },
+        subscription: true,
+        categories: {
+          include: {
+            _count: {
+              select: {
+                dishes: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!restaurant) {
+      return res.status(404).json({ error: 'Restaurant not found' });
+    }
+
+    res.json(restaurant);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const updateSubscription = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { plan, status } = req.body;
+
+    const subscription = await prisma.subscription.findUnique({
+      where: { id },
+      include: {
+        restaurant: {
+          include: {
+            user: true
+          }
+        }
+      }
+    });
+
+    if (!subscription) {
+      return res.status(404).json({ error: 'Subscription not found' });
+    }
+
+    let updateData = {
+      status
+    };
+
+    // If activating a paid plan
+    if (plan && (plan === 'MONTHLY' || plan === 'YEARLY')) {
+      const endDate = calculateSubscriptionEndDate(plan);
+      updateData = {
+        ...updateData,
+        plan,
+        status: 'ACTIVE',
+        currentPeriodStart: new Date(),
+        currentPeriodEnd: endDate
+      };
+
+      // Send activation email
+      await sendSubscriptionActivatedEmail(
+        subscription.restaurant.user.email,
+        subscription.restaurant.user.name,
+        plan
+      );
+    }
+
+    const updatedSubscription = await prisma.subscription.update({
+      where: { id },
+      data: updateData,
+      include: {
+        restaurant: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                email: true,
+                name: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    res.json(updatedSubscription);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const extendSubscription = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { months } = req.body;
+
+    if (!months || months < 1) {
+      return res.status(400).json({ error: 'Invalid months value' });
+    }
+
+    const subscription = await prisma.subscription.findUnique({
+      where: { id }
+    });
+
+    if (!subscription) {
+      return res.status(404).json({ error: 'Subscription not found' });
+    }
+
+    const currentEnd = new Date(subscription.currentPeriodEnd);
+    const newEnd = new Date(currentEnd);
+    newEnd.setMonth(newEnd.getMonth() + parseInt(months));
+
+    const updatedSubscription = await prisma.subscription.update({
+      where: { id },
+      data: {
+        currentPeriodEnd: newEnd,
+        status: 'ACTIVE'
+      }
+    });
+
+    res.json(updatedSubscription);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getSubscriptionStats = async (req, res, next) => {
+  try {
+    const now = new Date();
+
+    const stats = await prisma.subscription.groupBy({
+      by: ['status'],
+      _count: true
+    });
+
+    const trialExpiringSoon = await prisma.subscription.count({
+      where: {
+        status: 'TRIAL',
+        trialEndsAt: {
+          gte: now,
+          lte: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000) // 3 days
+        }
+      }
+    });
+
+    const subscriptionExpiringSoon = await prisma.subscription.count({
+      where: {
+        status: 'ACTIVE',
+        currentPeriodEnd: {
+          gte: now,
+          lte: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000) // 7 days
+        }
+      }
+    });
+
+    res.json({
+      stats,
+      trialExpiringSoon,
+      subscriptionExpiringSoon
+    });
+  } catch (error) {
+    next(error);
+  }
+};
